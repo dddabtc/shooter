@@ -8,6 +8,8 @@ use std::time::Duration;
 use std::collections::HashSet;
 use std::path;
 use std::env;
+use ggez::audio;
+use ggez::audio::{SoundSource, Source};
 use rand::distributions::Uniform;
 
 const WINDOW_WIDTH: f32 = 1024.0;
@@ -172,6 +174,41 @@ impl ParticleSystem {
 }
 
 
+// 添加声音资源结构体
+struct SoundEffects {
+    shoot_sound: Source,
+    explosion_sound: Source,
+}
+impl SoundEffects {
+    fn new(ctx: &mut ggez::Context) -> GameResult<Self> {
+        let shoot_sound = Source::new(ctx, "/sound/shoot.wav")?;
+        let explosion_sound = Source::new(ctx, "/sound/expl1.wav")?;
+
+        Ok(SoundEffects {
+            shoot_sound,
+            explosion_sound,
+        })
+    }
+
+    fn play_shoot(&mut self, ctx: &mut ggez::Context) -> GameResult {
+        if self.shoot_sound.playing() {
+            self.shoot_sound.stop(ctx)?;
+        }
+        self.shoot_sound.play(ctx)?;
+        Ok(())
+    }
+
+    fn play_explosion(&mut self, ctx: &mut ggez::Context) -> GameResult {
+        if self.explosion_sound.playing() {
+            self.explosion_sound.stop(ctx)?;
+        }
+        self.explosion_sound.play(ctx)?;
+        Ok(())
+    }
+}
+
+
+
 struct MainState {
     player: GameObject,
     bullets: Vec<GameObject>,
@@ -182,6 +219,7 @@ struct MainState {
     shoot_cooldown: Duration,
     star_field: Vec<(Vec2, f32)>,
     particles: ParticleSystem,  // 修改字段名以匹配初始化
+    sounds: SoundEffects,  // 添加声音系统
 }
 
 impl MainState {
@@ -223,6 +261,12 @@ impl MainState {
             ));
         }
 
+        // 初始化声音系统
+        let mut sounds = SoundEffects::new(ctx)?;
+        sounds.shoot_sound.set_volume(0.3);
+        sounds.explosion_sound.set_volume(0.5);
+
+
         Ok(MainState {
             player,
             bullets: Vec::new(),
@@ -233,10 +277,15 @@ impl MainState {
             shoot_cooldown: Duration::from_secs(0),
             star_field,
             particles: ParticleSystem::new(),
+            sounds,
         })
     }
 
     fn shoot(&mut self, ctx: &mut ggez::Context) -> GameResult {
+
+        // 播放射击音效
+        self.sounds.play_shoot(ctx)?;
+
         let bullet_pos = Vec2::new(
             self.player.pos.x + self.player.size.x / 2.0 - 2.5,
             self.player.pos.y,
@@ -338,6 +387,9 @@ impl EventHandler for MainState {
                     destroyed_bullets.insert(bullet_idx);
                     destroyed_enemies.insert(enemy_idx);
                     self.score += 10;
+
+                    // 播放爆炸音效
+                    self.sounds.play_explosion(ctx)?;
 
                     explosion_positions.push((
                         Vec2::new(
