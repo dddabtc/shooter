@@ -8,12 +8,20 @@ use std::time::Duration;
 use std::collections::HashSet;
 use std::path;
 use std::env;
+use rand::distributions::Uniform;
 
-const WINDOW_WIDTH: f32 = 800.0;
-const WINDOW_HEIGHT: f32 = 600.0;
+const WINDOW_WIDTH: f32 = 1024.0;
+const WINDOW_HEIGHT: f32 = 768.0;
 const PLAYER_SPEED: f32 = 5.0;
 const BULLET_SPEED: f32 = 8.0;
 const ENEMY_SPEED: f32 = 2.0;
+
+// 优化粒子系统的常量
+const PARTICLE_LIFETIME: f32 = 0.5; // 减少粒子生命周期
+const EXPLOSION_PARTICLES: i32 = 10; // 减少每次爆炸的粒子数量
+const PARTICLE_SPEED: f32 = 50.0; // 降低粒子速度
+const PARTICLE_SIZE: f32 = 2.0;
+const MAX_PARTICLES: usize = 1000; // 添加最大粒子数量限制
 
 // 资源目录名称常量
 const RESOURCE_DIR: &str = "resources";
@@ -32,6 +40,9 @@ struct GameObject {
     rotation: f32,  // 添加旋转属性
     object_type: GameObjectType,
 }
+
+
+
 
 impl GameObject {
     fn new(ctx: &mut ggez::Context, x: f32, y: f32, width: f32, height: f32, object_type: GameObjectType) -> GameResult<Self> {
@@ -79,6 +90,88 @@ impl GameObject {
     }
 }
 
+#[derive(Clone)] // 添加 Clone trait
+struct Particle {
+    pos: Vec2,
+    vel: Vec2,
+    color: Color,
+    lifetime: f32,
+    size: f32,
+}
+
+impl Particle {
+    fn new(pos: Vec2, vel: Vec2, color: Color, size: f32) -> Self {
+        Particle {
+            pos,
+            vel,
+            color,
+            lifetime: PARTICLE_LIFETIME,
+            size,
+        }
+    }
+
+    fn update(&mut self, dt: f32) {
+        self.pos += self.vel * dt;
+        self.lifetime -= dt;
+        self.color.a = (self.lifetime / PARTICLE_LIFETIME).min(1.0);
+        self.size = self.size * (self.lifetime / PARTICLE_LIFETIME).max(0.1);
+    }
+}
+
+// 创建专门的粒子系统结构体
+struct ParticleSystem {
+    particles: Vec<Particle>,
+}
+
+impl ParticleSystem {
+    fn new() -> Self {
+        ParticleSystem {
+            particles: Vec::with_capacity(MAX_PARTICLES), // 预分配内存
+        }
+    }
+
+    fn update(&mut self, dt: f32) {
+        self.particles.retain_mut(|particle| {
+            particle.update(dt);
+            particle.lifetime > 0.0
+        });
+    }
+
+    fn add_explosion(&mut self, pos: Vec2, color: Color) {
+        let mut rng = rand::thread_rng();
+
+        // 确保不超过最大粒子数量
+        let available_slots = MAX_PARTICLES.saturating_sub(self.particles.len());
+        let particles_to_add = EXPLOSION_PARTICLES.min(available_slots as i32);
+
+        for _ in 0..particles_to_add {
+            let angle = rng.gen_range(0.0..std::f32::consts::TAU);
+            let speed = rng.gen_range(PARTICLE_SPEED * 0.5..PARTICLE_SPEED);
+            let vel = Vec2::new(angle.cos() * speed, angle.sin() * speed);
+            let size = rng.gen_range(PARTICLE_SIZE * 0.5..PARTICLE_SIZE * 1.5);
+
+            let particle = Particle::new(pos, vel, color, size);
+            self.particles.push(particle);
+        }
+    }
+
+    fn draw(&self, ctx: &mut ggez::Context, canvas: &mut Canvas) -> GameResult {
+        for particle in &self.particles {
+            let mesh = Mesh::new_circle(
+                ctx,
+                graphics::DrawMode::fill(),
+                particle.pos,
+                particle.size,
+                0.1,
+                particle.color,
+            )?;
+            canvas.draw(&mesh, DrawParam::default());
+        }
+        Ok(())
+    }
+}
+
+
 struct MainState {
     player: GameObject,
     bullets: Vec<GameObject>,
@@ -88,9 +181,26 @@ struct MainState {
     game_over: bool,
     shoot_cooldown: Duration,
     star_field: Vec<(Vec2, f32)>,
+    particles: ParticleSystem,  // 修改字段名以匹配初始化
 }
 
 impl MainState {
+
+    fn spawn_enemy(&mut self, ctx: &mut ggez::Context) -> GameResult {
+        let mut rng = rand::thread_rng();
+        let x = rng.gen_range(0.0..WINDOW_WIDTH - 40.0);
+        let enemy = GameObject::new(
+            ctx,
+            x,
+            -50.0,  // 在屏幕上方生成
+            40.0,   // 敌人宽度
+            40.0,   // 敌人高度
+            GameObjectType::Enemy,
+        )?;
+        self.enemies.push(enemy);
+        Ok(())
+    }
+
     fn new(ctx: &mut ggez::Context) -> GameResult<MainState> {
         let player = GameObject::new(
             ctx,
@@ -122,22 +232,25 @@ impl MainState {
             game_over: false,
             shoot_cooldown: Duration::from_secs(0),
             star_field,
+            particles: ParticleSystem::new(),
         })
     }
 
-    fn spawn_enemy(&mut self, ctx: &mut ggez::Context) -> GameResult {
-        let mut rng = rand::thread_rng();
-        let x = rng.gen_range(0.0..WINDOW_WIDTH - 40.0);
-        let enemy = GameObject::new(ctx, x, -50.0, 40.0, 40.0, GameObjectType::Enemy)?;
-        self.enemies.push(enemy);
-        Ok(())
-    }
-
     fn shoot(&mut self, ctx: &mut ggez::Context) -> GameResult {
-        let bullet = GameObject::new(
-            ctx,
+        let bullet_pos = Vec2::new(
             self.player.pos.x + self.player.size.x / 2.0 - 2.5,
             self.player.pos.y,
+        );
+
+        self.particles.add_explosion(
+            bullet_pos,
+            Color::new(1.0, 1.0, 0.0, 0.5),
+        );
+
+        let bullet = GameObject::new(
+            ctx,
+            bullet_pos.x,
+            bullet_pos.y,
             5.0,
             20.0,
             GameObjectType::Bullet,
@@ -208,8 +321,14 @@ impl EventHandler for MainState {
             }
         }
 
+
+
+
+        // 修改碰撞检测部分，收集爆炸位置
         let mut destroyed_bullets = HashSet::new();
         let mut destroyed_enemies = HashSet::new();
+        // 收集爆炸位置
+        let mut explosion_positions = Vec::new();
 
         for (bullet_idx, bullet) in self.bullets.iter().enumerate() {
             for (enemy_idx, enemy) in self.enemies.iter().enumerate() {
@@ -219,10 +338,19 @@ impl EventHandler for MainState {
                     destroyed_bullets.insert(bullet_idx);
                     destroyed_enemies.insert(enemy_idx);
                     self.score += 10;
+
+                    explosion_positions.push((
+                        Vec2::new(
+                            enemy.pos.x + enemy.size.x / 2.0,
+                            enemy.pos.y + enemy.size.y / 2.0
+                        ),
+                        Color::new(1.0, 0.5, 0.0, 1.0)
+                    ));
                 }
             }
         }
 
+        // 移除被销毁的对象
         let mut bullets_to_remove: Vec<_> = destroyed_bullets.into_iter().collect();
         let mut enemies_to_remove: Vec<_> = destroyed_enemies.into_iter().collect();
         bullets_to_remove.sort_unstable_by(|a, b| b.cmp(a));
@@ -239,13 +367,22 @@ impl EventHandler for MainState {
             }
         }
 
+        // 在碰撞检测后创建爆炸效果时使用正确的字段名
+        for (pos, color) in explosion_positions {
+            self.particles.add_explosion(pos, color);
+        }
+
+        // 更新粒子系统时使用正确的字段名
+        self.particles.update(ctx.time.delta().as_secs_f32());
+
         Ok(())
     }
+
 
     fn draw(&mut self, ctx: &mut ggez::Context) -> GameResult {
         let mut canvas = Canvas::from_frame(ctx, Color::new(0.0, 0.05, 0.1, 1.0));
 
-        // 修改星星的绘制方式
+        // 绘制星星
         for (pos, size) in &self.star_field {
             let star = Mesh::new_circle(
                 ctx,
@@ -258,6 +395,7 @@ impl EventHandler for MainState {
             canvas.draw(&star, DrawParam::default());
         }
 
+        // 绘制游戏对象
         self.player.draw(&mut canvas);
 
         for bullet in &self.bullets {
@@ -268,8 +406,17 @@ impl EventHandler for MainState {
             enemy.draw(&mut canvas);
         }
 
+        // 使用正确的字段名绘制粒子
+        self.particles.draw(ctx, &mut canvas)?;
+
+        // 绘制 UI
         let score_text = graphics::Text::new(format!("Score: {}", self.score));
-        canvas.draw(&score_text, DrawParam::default().dest(Vec2::new(10.0, 10.0)).color(Color::WHITE));
+        canvas.draw(
+            &score_text,
+            DrawParam::default()
+                .dest(Vec2::new(10.0, 10.0))
+                .color(Color::WHITE)
+        );
 
         if self.game_over {
             let game_over_text = graphics::Text::new("Game Over!");
@@ -282,6 +429,7 @@ impl EventHandler for MainState {
         canvas.finish(ctx)?;
         Ok(())
     }
+
 }
 
 fn main() -> GameResult {
