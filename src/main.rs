@@ -104,7 +104,7 @@ impl GameObject {
                 DrawParam::default()
                     .dest(scaled_pos)
                     .rotation(self.rotation)
-                    .offset(Vec2::new(0.5, 0.5))
+                    .offset(Vec2::new(0.5, 0.5))  // 这里使用了 0.5 offset，意味着旋转中心在图片中心
                     .scale(Vec2::new(
                         scaled_size.x / image.width() as f32,
                         scaled_size.y / image.height() as f32
@@ -268,10 +268,11 @@ impl MainState {
     fn new(ctx: &mut ggez::Context) -> GameResult<MainState> {
         let window_size = WindowSize::new(BASE_WINDOW_WIDTH, BASE_WINDOW_HEIGHT);
 
+        // 修改玩家初始位置，考虑到中心点定位
         let player = GameObject::new(
             ctx,
-            BASE_WINDOW_WIDTH / 2.0 - 25.0,
-            BASE_WINDOW_HEIGHT - 60.0,
+            BASE_WINDOW_WIDTH / 2.0,  // 水平居中
+            BASE_WINDOW_HEIGHT - 30.0, // 距离底部一定距离
             50.0,
             60.0,
             GameObjectType::Player,
@@ -326,10 +327,15 @@ impl MainState {
     fn shoot(&mut self, ctx: &mut ggez::Context) -> GameResult {
         self.sounds.play_shoot(ctx)?;
 
-        // 计算子弹发射位置：从飞机顶部中心发射
+        // 由于 GameObject 的 draw 方法使用了 0.5 的 offset，
+        // 这意味着 self.player.pos 实际上是飞机的中心点
+        // 因此我们需要从飞机的中心点计算子弹发射位置
+        let center_x = self.player.pos.x;
+        let top_y = self.player.pos.y - self.player.base_size.y / 2.0;
+
         let bullet_pos = Vec2::new(
-            self.player.pos.x + (self.player.base_size.x / 2.0),  // 水平居中
-            self.player.pos.y,  // 从飞机顶部发射
+            center_x,  // 直接使用中心点的 x 坐标
+            top_y     // 使用顶部的 y 坐标
         );
 
         self.particles.add_explosion(
