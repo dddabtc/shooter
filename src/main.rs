@@ -182,7 +182,7 @@ impl ParticleSystem {
 
         for _ in 0..particles_to_add {
             let angle = rng.gen_range(0.0..std::f32::consts::TAU);
-            let base_speed = PARTICLE_SPEED * window_size.scale_x.min(window_size.scale_y);
+            let base_speed  = PARTICLE_SPEED * window_size.scale_x.min(window_size.scale_y);
             let speed = rng.gen_range(base_speed * 0.5..base_speed);
             let vel = Vec2::new(angle.cos() * speed, angle.sin() * speed);
             let size = PARTICLE_SIZE * window_size.scale_x.min(window_size.scale_y);
@@ -197,15 +197,19 @@ impl ParticleSystem {
             let scaled_pos = window_size.scale_vec2(particle.pos);
             let scaled_size = particle.size * window_size.scale_x.min(window_size.scale_y);
 
-            let mesh = Mesh::new_circle(
-                ctx,
-                graphics::DrawMode::fill(),
-                scaled_pos,
+            // 创建一个简单的矩形代替圆形
+            let rect = graphics::Rect::new(
+                scaled_pos.x - scaled_size/2.0,
+                scaled_pos.y - scaled_size/2.0,
                 scaled_size,
-                0.1,
-                particle.color,
-            )?;
-            canvas.draw(&mesh, DrawParam::default());
+                scaled_size,
+            );
+
+            let draw_param = DrawParam::default()
+                .color(particle.color);
+
+            // 直接绘制矩形
+            canvas.draw(&graphics::Quad, draw_param.dest(rect.point()).scale([rect.w, rect.h]));
         }
         Ok(())
     }
@@ -322,9 +326,10 @@ impl MainState {
     fn shoot(&mut self, ctx: &mut ggez::Context) -> GameResult {
         self.sounds.play_shoot(ctx)?;
 
+        // 计算子弹发射位置：从飞机顶部中心发射
         let bullet_pos = Vec2::new(
-            self.player.pos.x + self.player.base_size.x / 2.0 - 2.5,
-            self.player.pos.y,
+            self.player.pos.x + (self.player.base_size.x / 2.0),  // 水平居中
+            self.player.pos.y,  // 从飞机顶部发射
         );
 
         self.particles.add_explosion(
@@ -335,7 +340,7 @@ impl MainState {
 
         let bullet = GameObject::new(
             ctx,
-            bullet_pos.x,
+            bullet_pos.x - 2.5,  // 考虑子弹宽度的一半，使其居中
             bullet_pos.y,
             5.0,
             20.0,
