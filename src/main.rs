@@ -113,16 +113,77 @@ impl GameObject {
         }
     }
 
-    fn intersects(&self, other: &GameObject, window_size: &WindowSize) -> bool {
-        let scaled_pos = window_size.scale_vec2(self.pos);
-        let scaled_size = window_size.scale_vec2(self.base_size);
-        let other_scaled_pos = window_size.scale_vec2(other.pos);
-        let other_scaled_size = window_size.scale_vec2(other.base_size);
+    // 添加一个新方法来绘制碰撞范围
+    fn draw_collision_circle(&self, ctx: &mut ggez::Context, canvas: &mut Canvas, window_size: &WindowSize) -> GameResult {
+        let center = self.pos;
+        let radius = match self.object_type {
+            GameObjectType::Bullet => self.base_size.x * 0.8,  // 匹配碰撞检测逻辑
+            GameObjectType::Enemy => self.base_size.x * 0.45,  // 匹配碰撞检测逻辑
+            GameObjectType::Player => self.base_size.x * 0.4,  // 保持不变
+        };
 
-        scaled_pos.x < other_scaled_pos.x + other_scaled_size.x &&
-            scaled_pos.x + scaled_size.x > other_scaled_pos.x &&
-            scaled_pos.y < other_scaled_pos.y + other_scaled_size.y &&
-            scaled_pos.y + scaled_size.y > other_scaled_pos.y
+        let scaled_center = window_size.scale_vec2(center);
+        let scaled_radius = radius * window_size.scale_x.min(window_size.scale_y);
+
+        let color = match self.object_type {
+            GameObjectType::Bullet => Color::new(1.0, 1.0, 0.0, 0.5),  // 黄色
+            GameObjectType::Enemy => Color::new(1.0, 0.0, 0.0, 0.5),   // 红色
+            GameObjectType::Player => Color::new(0.0, 1.0, 0.0, 0.5),  // 绿色
+        };
+
+        let circle = Mesh::new_circle(
+            ctx,
+            graphics::DrawMode::stroke(2.0),
+            [scaled_center.x, scaled_center.y],
+            scaled_radius,
+            0.1,
+            color,
+        )?;
+
+        canvas.draw(&circle, DrawParam::default());
+        Ok(())
+    }
+
+    fn intersects(&self, other: &GameObject, window_size: &WindowSize) -> bool {
+        let self_center = self.pos;
+        let other_center = other.pos;
+
+        // 专门处理子弹和敌机的碰撞
+        let (self_radius, other_radius) = match (&self.object_type, &other.object_type) {
+            // 子弹打敌机的情况
+            (GameObjectType::Bullet, GameObjectType::Enemy) => {
+                let bullet_radius = self.base_size.x * 0.8;  // 增大子弹的碰撞半径
+                let enemy_radius = other.base_size.x * 0.45; // 敌机碰撞半径稍微调整
+                (bullet_radius, enemy_radius)
+            },
+            // 敌机被子弹打的情况（顺序相反）
+            (GameObjectType::Enemy, GameObjectType::Bullet) => {
+                let enemy_radius = self.base_size.x * 0.45;
+                let bullet_radius = other.base_size.x * 0.8;
+                (enemy_radius, bullet_radius)
+            },
+            // 玩家和敌机的碰撞保持原样
+            (GameObjectType::Player, GameObjectType::Enemy) |
+            (GameObjectType::Enemy, GameObjectType::Player) => {
+                let radius = self.base_size.x.min(self.base_size.y) * 0.4;
+                (radius, radius)
+            },
+            // 其他情况（不应该发生）
+            _ => {
+                let radius = self.base_size.x.min(self.base_size.y) * 0.4;
+                (radius, radius)
+            }
+        };
+
+        // 计算实际的碰撞距离
+        let scaled_self_center = window_size.scale_vec2(self_center);
+        let scaled_other_center = window_size.scale_vec2(other_center);
+        let scaled_self_radius = self_radius * window_size.scale_x.min(window_size.scale_y);
+        let scaled_other_radius = other_radius * window_size.scale_x.min(window_size.scale_y);
+
+        // 计算中心点距离并判断是否碰撞
+        let distance = scaled_self_center.distance(scaled_other_center);
+        distance < (scaled_self_radius + scaled_other_radius)
     }
 }
 
@@ -513,6 +574,13 @@ impl EventHandler for MainState {
 
         for enemy in &self.enemies {
             enemy.draw(&mut canvas, &self.window_size);
+        }
+
+        // 绘制碰撞检测范围
+       // self.player.draw_collision_circle(ctx, &mut canvas, &self.window_size)?;
+
+        for bullet in &self.bullets {
+            bullet.draw_collision_circle(ctx, &mut canvas, &self.window_size)?;
         }
 
         // 绘制粒子效果
