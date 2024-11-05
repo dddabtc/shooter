@@ -65,6 +65,7 @@ enum GameObjectType {
     Bullet,
     Enemy,
     GuidedMissile,
+    MissileAmmo,  // 新增：导弹弹药补给
 }
 
 // 游戏对象结构体
@@ -85,6 +86,7 @@ impl GameObject {
             GameObjectType::Bullet => (Some(Image::from_path(ctx, "/img/bullet.png")?), 0.0),
             GameObjectType::Enemy => (Some(Image::from_path(ctx, "/img/player.png")?), std::f32::consts::PI),
             GameObjectType::GuidedMissile => (Some(Image::from_path(ctx, "/img/bullet.png")?), 0.0),  // 使用子弹图片
+            GameObjectType::MissileAmmo => (Some(Image::from_path(ctx, "/img/bullet.png")?), 0.0),  // 暂时使用子弹图片
 
         };
 
@@ -157,21 +159,27 @@ impl GameObject {
     // 添加一个新方法来绘制碰撞范围
     fn draw_collision_circle(&self, ctx: &mut ggez::Context, canvas: &mut Canvas, window_size: &WindowSize) -> GameResult {
         let center = self.pos;
+
+        // 在 draw_collision_circle 中的半径设置
         let radius = match self.object_type {
-            GameObjectType::Bullet => self.base_size.x * 0.8,  // 匹配碰撞检测逻辑
-            GameObjectType::Enemy => self.base_size.x * 0.45,  // 匹配碰撞检测逻辑
-            GameObjectType::Player => self.base_size.x * 0.4,  // 保持不变
-            GameObjectType::GuidedMissile => self.base_size.x * 1.0,  // 导弹的碰撞范围稍大
+            GameObjectType::Bullet => self.base_size.x * 0.8,      // 匹配碰撞检测逻辑
+            GameObjectType::Enemy => self.base_size.x * 0.45,      // 匹配碰撞检测逻辑
+            GameObjectType::Player => self.base_size.x * 0.4,      // 保持不变
+            GameObjectType::GuidedMissile => self.base_size.x * 1.0, // 导弹的碰撞范围稍大
+            GameObjectType::MissileAmmo => self.base_size.x * 0.6,   // 弹药包的碰撞范围
         };
+
 
         let scaled_center = window_size.scale_vec2(center);
         let scaled_radius = radius * window_size.scale_x.min(window_size.scale_y);
 
+        // 在 draw_collision_circle 中的颜色设置
         let color = match self.object_type {
-            GameObjectType::Bullet => Color::new(1.0, 1.0, 0.0, 0.5),  // 黄色
-            GameObjectType::Enemy => Color::new(1.0, 0.0, 0.0, 0.5),   // 红色
-            GameObjectType::Player => Color::new(0.0, 1.0, 0.0, 0.5),  // 绿色
-            GameObjectType::GuidedMissile => Color::new(1.0, 0.0, 1.0, 0.5),  // 紫色
+            GameObjectType::Bullet => Color::new(1.0, 1.0, 0.0, 0.5),    // 黄色
+            GameObjectType::Enemy => Color::new(1.0, 0.0, 0.0, 0.5),     // 红色
+            GameObjectType::Player => Color::new(0.0, 1.0, 0.0, 0.5),    // 绿色
+            GameObjectType::GuidedMissile => Color::new(1.0, 0.0, 1.0, 0.5), // 紫色
+            GameObjectType::MissileAmmo => Color::new(0.0, 1.0, 1.0, 0.5),   // 青色
         };
 
         let circle = Mesh::new_circle(
@@ -366,7 +374,10 @@ struct MainState {
     star_field: Vec<(Vec2, f32)>,
     particles: ParticleSystem,
     sounds: SoundEffects,
-    missile_cooldown: Duration,  // 新增
+    missile_cooldown: Duration,  // 新增：导弹冷却时间
+    missile_ammo: i32,           // 新增：当前导弹数量
+    ammo_spawn_timer: Duration,  // 新增：弹药生成计时器
+    ammo_items: Vec<GameObject>, // 新增：场景中的弹药
 }
 
 impl MainState {
@@ -412,13 +423,34 @@ impl MainState {
             particles: ParticleSystem::new(),
             sounds,
             missile_cooldown: Duration::from_secs(0),
+            missile_ammo: 5,              // 初始5发导弹
+            ammo_spawn_timer: Duration::from_secs(0),
+            ammo_items: Vec::new(),
         })
+    }
+
+    // 添加生成弹药的方法
+    fn spawn_missile_ammo(&mut self, ctx: &mut ggez::Context) -> GameResult {
+        let mut rng = rand::thread_rng();
+        let x = rng.gen_range(0.0..BASE_WINDOW_WIDTH - 20.0);
+
+        let ammo = GameObject::new(
+            ctx,
+            x,
+            -30.0,
+            20.0,  // 弹药包大小
+            20.0,
+            GameObjectType::MissileAmmo,
+        )?;
+
+        self.ammo_items.push(ammo);
+        Ok(())
     }
 
     // 添加发射导弹的方法
     fn launch_missile(&mut self, ctx: &mut ggez::Context) -> GameResult {
-        if self.enemies.is_empty() {
-            return Ok(());  // 如果没有敌人，不发射导弹
+        if self.enemies.is_empty() || self.missile_ammo <= 0 {
+            return Ok(());  // 如果没有敌人或没有导弹，不发射
         }
 
         // 找到最近的敌人
@@ -447,6 +479,9 @@ impl MainState {
 
         self.bullets.push(missile);
         self.sounds.play_shoot(ctx)?;
+
+        // 发射后减少弹药
+        self.missile_ammo -= 1;
         Ok(())
     }
 
@@ -649,6 +684,42 @@ impl EventHandler for MainState {
         // 更新粒子系统
         self.particles.update(ctx.time.delta().as_secs_f32(), &self.window_size);
 
+
+        // 更新弹药生成计时器
+        self.ammo_spawn_timer += ctx.time.delta();
+        if self.ammo_spawn_timer.as_secs_f32() >= 15.0 { // 每15秒生成一个弹药包
+            self.spawn_missile_ammo(ctx)?;
+            self.ammo_spawn_timer = Duration::from_secs(0);
+        }
+
+        // 更新弹药位置
+        let ammo_speed = ENEMY_SPEED_RATIO * self.window_size.height;
+        for ammo in &mut self.ammo_items {
+            ammo.pos.y += ammo_speed;
+        }
+        self.ammo_items.retain(|ammo| ammo.pos.y < BASE_WINDOW_HEIGHT);
+
+        // 检测玩家与弹药的碰撞
+        let mut collected_ammo = Vec::new();
+        for (idx, ammo) in self.ammo_items.iter().enumerate() {
+            if ammo.intersects(&self.player, &self.window_size) {
+                collected_ammo.push(idx);
+                self.missile_ammo += 3; // 每个弹药包补充3发导弹
+
+                // 添加收集效果
+                self.particles.add_explosion(
+                    ammo.pos,
+                    Color::new(0.0, 1.0, 1.0, 1.0), // 青色粒子效果
+                    &self.window_size,
+                );
+            }
+        }
+
+        // 移除被收集的弹药
+        for idx in collected_ammo.iter().rev() {
+            self.ammo_items.remove(*idx);
+        }
+
         Ok(())
     }
 
@@ -681,6 +752,25 @@ impl EventHandler for MainState {
         for enemy in &self.enemies {
             enemy.draw(&mut canvas, &self.window_size);
         }
+
+        // 绘制弹药
+        for ammo in &self.ammo_items {
+            ammo.draw(&mut canvas, &self.window_size);
+        }
+
+        // 绘制导弹数量
+        let ammo_text = graphics::Text::new(format!("Missiles: {}", self.missile_ammo));
+        let ammo_pos = self.window_size.scale_vec2(Vec2::new(10.0, 40.0));
+        canvas.draw(
+            &ammo_text,
+            DrawParam::default()
+                .dest(ammo_pos)
+                .color(Color::WHITE)
+                .scale(Vec2::new(
+                    self.window_size.scale_x,
+                    self.window_size.scale_y
+                ))
+        );
 
         // 绘制碰撞检测范围
        // self.player.draw_collision_circle(ctx, &mut canvas, &self.window_size)?;
