@@ -64,6 +64,7 @@ enum GameObjectType {
     Player,
     Bullet,
     Enemy,
+    GuidedMissile,
 }
 
 // 游戏对象结构体
@@ -74,6 +75,7 @@ struct GameObject {
     image: Option<Image>,
     rotation: f32,
     object_type: GameObjectType,
+    target: Option<usize>,  // 新增：用于存储目标敌人的索引
 }
 
 impl GameObject {
@@ -82,6 +84,8 @@ impl GameObject {
             GameObjectType::Player => (Some(Image::from_path(ctx, "/img/player.png")?), 0.0),
             GameObjectType::Bullet => (Some(Image::from_path(ctx, "/img/bullet.png")?), 0.0),
             GameObjectType::Enemy => (Some(Image::from_path(ctx, "/img/player.png")?), std::f32::consts::PI),
+            GameObjectType::GuidedMissile => (Some(Image::from_path(ctx, "/img/bullet.png")?), 0.0),  // 使用子弹图片
+
         };
 
         Ok(GameObject {
@@ -91,6 +95,7 @@ impl GameObject {
             image,
             rotation,
             object_type,
+            target: None,
         })
     }
 
@@ -113,6 +118,42 @@ impl GameObject {
         }
     }
 
+    // 添加导弹追踪逻辑
+    fn update_guided_missile(&mut self, enemies: &Vec<GameObject>, window_size: &WindowSize) {
+        const MISSILE_SPEED: f32 = 4.0;  // 导弹基础速度
+        const TURN_RATE: f32 = 0.1;      // 转向速率
+
+        if let Some(target_idx) = self.target {
+            if target_idx < enemies.len() {
+                let target = &enemies[target_idx];
+                let direction = target.pos - self.pos;
+                let distance = direction.length();
+
+                if distance > 0.0 {
+                    // 计算目标角度
+                    let target_angle = direction.y.atan2(direction.x);
+
+                    // 平滑转向
+                    let angle_diff = target_angle - self.rotation;
+                    let angle_diff = if angle_diff > std::f32::consts::PI {
+                        angle_diff - 2.0 * std::f32::consts::PI
+                    } else if angle_diff < -std::f32::consts::PI {
+                        angle_diff + 2.0 * std::f32::consts::PI
+                    } else {
+                        angle_diff
+                    };
+
+                    self.rotation += angle_diff * TURN_RATE;
+
+                    // 更新速度
+                    self.speed.x = self.rotation.cos() * MISSILE_SPEED * window_size.scale_x;
+                    self.speed.y = self.rotation.sin() * MISSILE_SPEED * window_size.scale_y;
+                }
+            }
+        }
+    }
+
+
     // 添加一个新方法来绘制碰撞范围
     fn draw_collision_circle(&self, ctx: &mut ggez::Context, canvas: &mut Canvas, window_size: &WindowSize) -> GameResult {
         let center = self.pos;
@@ -120,6 +161,7 @@ impl GameObject {
             GameObjectType::Bullet => self.base_size.x * 0.8,  // 匹配碰撞检测逻辑
             GameObjectType::Enemy => self.base_size.x * 0.45,  // 匹配碰撞检测逻辑
             GameObjectType::Player => self.base_size.x * 0.4,  // 保持不变
+            GameObjectType::GuidedMissile => self.base_size.x * 1.0,  // 导弹的碰撞范围稍大
         };
 
         let scaled_center = window_size.scale_vec2(center);
@@ -129,6 +171,7 @@ impl GameObject {
             GameObjectType::Bullet => Color::new(1.0, 1.0, 0.0, 0.5),  // 黄色
             GameObjectType::Enemy => Color::new(1.0, 0.0, 0.0, 0.5),   // 红色
             GameObjectType::Player => Color::new(0.0, 1.0, 0.0, 0.5),  // 绿色
+            GameObjectType::GuidedMissile => Color::new(1.0, 0.0, 1.0, 0.5),  // 紫色
         };
 
         let circle = Mesh::new_circle(
@@ -323,6 +366,7 @@ struct MainState {
     star_field: Vec<(Vec2, f32)>,
     particles: ParticleSystem,
     sounds: SoundEffects,
+    missile_cooldown: Duration,  // 新增
 }
 
 impl MainState {
@@ -367,8 +411,45 @@ impl MainState {
             star_field,
             particles: ParticleSystem::new(),
             sounds,
+            missile_cooldown: Duration::from_secs(0),
         })
     }
+
+    // 添加发射导弹的方法
+    fn launch_missile(&mut self, ctx: &mut ggez::Context) -> GameResult {
+        if self.enemies.is_empty() {
+            return Ok(());  // 如果没有敌人，不发射导弹
+        }
+
+        // 找到最近的敌人
+        let player_pos = self.player.pos;
+        let mut closest_enemy = 0;
+        let mut min_distance = f32::MAX;
+
+        for (idx, enemy) in self.enemies.iter().enumerate() {
+            let distance = enemy.pos.distance(player_pos);
+            if distance < min_distance {
+                min_distance = distance;
+                closest_enemy = idx;
+            }
+        }
+
+        // 创建导弹并设置目标
+        let mut missile = GameObject::new(
+            ctx,
+            self.player.pos.x,
+            self.player.pos.y - self.player.base_size.y / 2.0,
+            8.0,  // 稍微大一点的尺寸
+            24.0,
+            GameObjectType::GuidedMissile,
+        )?;
+        missile.target = Some(closest_enemy);
+
+        self.bullets.push(missile);
+        self.sounds.play_shoot(ctx)?;
+        Ok(())
+    }
+
 
     fn spawn_enemy(&mut self, ctx: &mut ggez::Context) -> GameResult {
         let mut rng = rand::thread_rng();
@@ -465,18 +546,39 @@ impl EventHandler for MainState {
             self.shoot_cooldown = Duration::from_millis(250);
         }
 
+        // 更新导弹冷却时间
+        self.missile_cooldown = self.missile_cooldown.saturating_sub(ctx.time.delta());
+
+        // 处理发射追踪导弹
+        if keyboard::is_key_pressed(ctx, KeyCode::X) && self.missile_cooldown.is_zero() {
+            self.launch_missile(ctx)?;
+            self.missile_cooldown = Duration::from_millis(1000);  // 1秒冷却时间
+        }
+
+        // 更新所有子弹和导弹
         let bullet_speed = BULLET_SPEED_RATIO * self.window_size.height;
         for bullet in &mut self.bullets {
-            bullet.pos.y -= bullet_speed;
+            match bullet.object_type {
+                GameObjectType::Bullet => {
+                    bullet.pos.y -= bullet_speed;
+                }
+                GameObjectType::GuidedMissile => {
+                    bullet.update_guided_missile(&self.enemies, &self.window_size);
+                    bullet.pos += bullet.speed;
+                }
+                _ => {}
+            }
         }
         self.bullets.retain(|bullet| bullet.pos.y > -bullet.base_size.y);
 
+        // 处理敌人生成
         self.spawn_timer += ctx.time.delta();
         if self.spawn_timer.as_secs_f32() >= 1.0 {
             self.spawn_enemy(ctx)?;
             self.spawn_timer = Duration::from_secs(0);
         }
 
+        // 更新敌人位置
         let enemy_speed = ENEMY_SPEED_RATIO * self.window_size.height;
         for enemy in &mut self.enemies {
             enemy.pos.y += enemy_speed;
@@ -506,7 +608,11 @@ impl EventHandler for MainState {
                     bullet.intersects(enemy, &self.window_size) {
                     destroyed_bullets.insert(bullet_idx);
                     destroyed_enemies.insert(enemy_idx);
-                    self.score += 10;
+                    // 导弹击中给更多分数
+                    self.score += match bullet.object_type {
+                        GameObjectType::GuidedMissile => 20,
+                        _ => 10,
+                    };
 
                     self.sounds.play_explosion(ctx)?;
 
