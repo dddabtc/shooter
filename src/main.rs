@@ -724,7 +724,7 @@ impl EventHandler for MainState {
 
         // 在弹药生成逻辑中随机生成扇形弹药
         self.ammo_spawn_timer += ctx.time.delta();
-        if self.ammo_spawn_timer.as_secs_f32() >= 15.0 {
+        if self.ammo_spawn_timer.as_secs_f32() >= 1.0 {
             if rand::random::<bool>() {  // 50%概率生成普通导弹弹药或扇形弹药
                 self.spawn_missile_ammo(ctx)?;
             } else {
@@ -829,28 +829,28 @@ impl EventHandler for MainState {
         }
         self.ammo_items.retain(|ammo| ammo.pos.y < BASE_WINDOW_HEIGHT);
 
-        // 检测玩家与弹药的碰撞
-        let mut collected_ammo = Vec::new();
-        for (idx, ammo) in self.ammo_items.iter().enumerate() {
-            if ammo.intersects(&self.player, &self.window_size) {
-                collected_ammo.push(idx);
-                self.missile_ammo += 3; // 每个弹药包补充3发导弹
+        // // 检测玩家与弹药的碰撞
+        // let mut collected_ammo = Vec::new();
+        // for (idx, ammo) in self.ammo_items.iter().enumerate() {
+        //     if ammo.intersects(&self.player, &self.window_size) {
+        //         collected_ammo.push(idx);
+        //         self.missile_ammo += 3; // 每个弹药包补充3发导弹
+        //
+        //         // 添加收集效果
+        //         self.particles.add_explosion(
+        //             ammo.pos,
+        //             Color::new(0.0, 1.0, 1.0, 1.0), // 青色粒子效果
+        //             &self.window_size,
+        //         );
+        //     }
+        // }
+        //
+        // // 移除被收集的弹药
+        // for idx in collected_ammo.iter().rev() {
+        //     self.ammo_items.remove(*idx);
+        // }
 
-                // 添加收集效果
-                self.particles.add_explosion(
-                    ammo.pos,
-                    Color::new(0.0, 1.0, 1.0, 1.0), // 青色粒子效果
-                    &self.window_size,
-                );
-            }
-        }
-
-        // 移除被收集的弹药
-        for idx in collected_ammo.iter().rev() {
-            self.ammo_items.remove(*idx);
-        }
-
-        // 修改弹药拾取逻辑，确保正确处理所有类型的弹药
+        // 保留并修改这段代码
         let mut collected_ammo = Vec::new();
         for (idx, ammo) in self.ammo_items.iter().enumerate() {
             if ammo.intersects(&self.player, &self.window_size) {
@@ -875,6 +875,11 @@ impl EventHandler for MainState {
                     _ => {}
                 }
             }
+        }
+
+        // 移除被收集的弹药
+        for idx in collected_ammo.iter().rev() {
+            self.ammo_items.remove(*idx);
         }
 
         Ok(())
@@ -902,10 +907,12 @@ impl EventHandler for MainState {
         // 绘制游戏对象
         self.player.draw(&mut canvas, &self.window_size);
 
-        // 绘制弹药和碰撞圈
+        // 绘制弹药包和扇形弹药，只给扇形弹药显示碰撞圈
         for ammo in &self.ammo_items {
             ammo.draw(&mut canvas, &self.window_size);
-            ammo.draw_collision_circle(ctx, &mut canvas, &self.window_size)?;  // 添加碰撞圈显示
+            if let GameObjectType::SpreadAmmo = ammo.object_type {
+                ammo.draw_collision_circle(ctx, &mut canvas, &self.window_size)?;  // 只给扇形弹药添加碰撞圈
+            }
         }
 
         for bullet in &self.bullets {
