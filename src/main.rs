@@ -66,6 +66,8 @@ enum GameObjectType {
     Enemy,
     GuidedMissile,
     MissileAmmo,  // 新增：导弹弹药补给
+    SpreadShot,     // 新增：扇形子弹
+    SpreadAmmo,     // 新增：扇形弹药
 }
 
 // 游戏对象结构体
@@ -87,6 +89,9 @@ impl GameObject {
             GameObjectType::Enemy => (Some(Image::from_path(ctx, "/img/player.png")?), std::f32::consts::PI),
             GameObjectType::GuidedMissile => (Some(Image::from_path(ctx, "/img/bullet.png")?), 0.0),  // 使用子弹图片
             GameObjectType::MissileAmmo => (Some(Image::from_path(ctx, "/img/bullet.png")?), 0.0),  // 暂时使用子弹图片
+            GameObjectType::SpreadShot => (Some(Image::from_path(ctx, "/img/bullet.png")?), 0.0),  // 使用子弹图片
+            GameObjectType::SpreadAmmo => (Some(Image::from_path(ctx, "/img/bullet.png")?), 0.0),  // 使用子弹图片
+
 
         };
 
@@ -167,6 +172,8 @@ impl GameObject {
             GameObjectType::Player => self.base_size.x * 0.4,      // 保持不变
             GameObjectType::GuidedMissile => self.base_size.x * 1.0, // 导弹的碰撞范围稍大
             GameObjectType::MissileAmmo => self.base_size.x * 0.6,   // 弹药包的碰撞范围
+            GameObjectType::SpreadShot => self.base_size.x * 0.8,    // 与普通子弹相同
+            GameObjectType::SpreadAmmo => self.base_size.x * 0.6,    // 与普通弹药包相同
         };
 
 
@@ -180,6 +187,8 @@ impl GameObject {
             GameObjectType::Player => Color::new(0.0, 1.0, 0.0, 0.5),    // 绿色
             GameObjectType::GuidedMissile => Color::new(1.0, 0.0, 1.0, 0.5), // 紫色
             GameObjectType::MissileAmmo => Color::new(0.0, 1.0, 1.0, 0.5),   // 青色
+            GameObjectType::SpreadShot => Color::new(1.0, 0.5, 0.0, 0.5),    // 橙色
+            GameObjectType::SpreadAmmo => Color::new(1.0, 0.5, 0.0, 0.5),    // 橙色
         };
 
         let circle = Mesh::new_circle(
@@ -202,24 +211,34 @@ impl GameObject {
         // 专门处理子弹和敌机的碰撞
         let (self_radius, other_radius) = match (&self.object_type, &other.object_type) {
             // 子弹打敌机的情况
-            (GameObjectType::Bullet, GameObjectType::Enemy) => {
-                let bullet_radius = self.base_size.x * 0.8;  // 增大子弹的碰撞半径
-                let enemy_radius = other.base_size.x * 0.45; // 敌机碰撞半径稍微调整
+            (GameObjectType::Bullet, GameObjectType::Enemy) |
+            (GameObjectType::SpreadShot, GameObjectType::Enemy) => {
+                let bullet_radius = self.base_size.x * 0.8;
+                let enemy_radius = other.base_size.x * 0.45;
                 (bullet_radius, enemy_radius)
             },
-            // 敌机被子弹打的情况（顺序相反）
-            (GameObjectType::Enemy, GameObjectType::Bullet) => {
+            // 敌机被子弹打的情况
+            (GameObjectType::Enemy, GameObjectType::Bullet) |
+            (GameObjectType::Enemy, GameObjectType::SpreadShot) => {
                 let enemy_radius = self.base_size.x * 0.45;
                 let bullet_radius = other.base_size.x * 0.8;
                 (enemy_radius, bullet_radius)
             },
-            // 玩家和敌机的碰撞保持原样
+            // 玩家和弹药包的碰撞
+            (GameObjectType::Player, GameObjectType::MissileAmmo) |
+            (GameObjectType::Player, GameObjectType::SpreadAmmo) |
+            (GameObjectType::MissileAmmo, GameObjectType::Player) |
+            (GameObjectType::SpreadAmmo, GameObjectType::Player) => {
+                let radius = self.base_size.x.min(self.base_size.y) * 0.6;
+                (radius, radius)
+            },
+            // 玩家和敌机的碰撞
             (GameObjectType::Player, GameObjectType::Enemy) |
             (GameObjectType::Enemy, GameObjectType::Player) => {
                 let radius = self.base_size.x.min(self.base_size.y) * 0.4;
                 (radius, radius)
             },
-            // 其他情况（不应该发生）
+            // 其他情况
             _ => {
                 let radius = self.base_size.x.min(self.base_size.y) * 0.4;
                 (radius, radius)
@@ -380,6 +399,7 @@ struct MainState {
     ammo_spawn_timer: Duration,  // 新增：弹药生成计时器
     ammo_items: Vec<GameObject>, // 新增：场景中的弹药
     p_key_pressed: bool,  // 新增：追踪 P 键状态
+    has_spread_shot: bool,  // 新增：是否拥有扇形射击能力
 }
 
 impl MainState {
@@ -432,6 +452,7 @@ impl MainState {
             ammo_spawn_timer: Duration::from_secs(0),
             ammo_items: Vec::new(),
             p_key_pressed: false,  // 初始化为 false
+            has_spread_shot: false,
         })
 
     }
@@ -459,6 +480,25 @@ impl MainState {
         self.missile_ammo = 5;
         self.ammo_spawn_timer = Duration::from_secs(0);
         self.p_key_pressed = false;
+        self.has_spread_shot = false;
+        Ok(())
+    }
+
+    // 添加扇形弹药生成方法
+    fn spawn_spread_ammo(&mut self, ctx: &mut ggez::Context) -> GameResult {
+        let mut rng = rand::thread_rng();
+        let x = rng.gen_range(0.0..BASE_WINDOW_WIDTH - 20.0);
+
+        let ammo = GameObject::new(
+            ctx,
+            x,
+            -30.0,
+            25.0,  // 稍微大一点
+            25.0,
+            GameObjectType::SpreadAmmo,
+        )?;
+
+        self.ammo_items.push(ammo);
         Ok(())
     }
 
@@ -534,35 +574,56 @@ impl MainState {
         Ok(())
     }
 
+    // 修改射击方法添加扇形射击
     fn shoot(&mut self, ctx: &mut ggez::Context) -> GameResult {
         self.sounds.play_shoot(ctx)?;
 
-        // 由于 GameObject 的 draw 方法使用了 0.5 的 offset，
-        // 这意味着 self.player.pos 实际上是飞机的中心点
-        // 因此我们需要从飞机的中心点计算子弹发射位置
         let center_x = self.player.pos.x;
         let top_y = self.player.pos.y - self.player.base_size.y / 2.0;
+        let bullet_pos = Vec2::new(center_x, top_y);
 
-        let bullet_pos = Vec2::new(
-            center_x,  // 直接使用中心点的 x 坐标
-            top_y     // 使用顶部的 y 坐标
-        );
-
+        // 添加粒子效果
         self.particles.add_explosion(
             bullet_pos,
-            Color::new(1.0, 1.0, 0.0, 0.5),
+            if self.has_spread_shot {
+                Color::new(1.0, 0.5, 0.0, 0.5)  // 橙色
+            } else {
+                Color::new(1.0, 1.0, 0.0, 0.5)  // 黄色
+            },
             &self.window_size,
         );
 
-        let bullet = GameObject::new(
-            ctx,
-            bullet_pos.x - 2.5,  // 考虑子弹宽度的一半，使其居中
-            bullet_pos.y,
-            5.0,
-            20.0,
-            GameObjectType::Bullet,
-        )?;
-        self.bullets.push(bullet);
+        if self.has_spread_shot {
+            // 扇形射击：发射5发子弹，角度范围为60度
+            let angles:[f32; 5] = [-30.0, -15.0, 0.0, 15.0, 30.0];  // 角度（度）
+            for &angle in angles.iter() {
+                let rad: f32 = angle.to_radians();
+                let direction = Vec2::new(rad.sin(), -rad.cos());
+                let mut bullet = GameObject::new(
+                    ctx,
+                    bullet_pos.x,
+                    bullet_pos.y,
+                    5.0,
+                    20.0,
+                    GameObjectType::SpreadShot,
+                )?;
+                bullet.speed = direction * BULLET_SPEED_RATIO * self.window_size.height;
+                bullet.rotation = rad;  // 设置子弹旋转角度
+                self.bullets.push(bullet);
+            }
+        } else {
+            // 普通射击
+            let bullet = GameObject::new(
+                ctx,
+                bullet_pos.x - 2.5,
+                bullet_pos.y,
+                5.0,
+                20.0,
+                GameObjectType::Bullet,
+            )?;
+            self.bullets.push(bullet);
+        }
+
         Ok(())
     }
 
@@ -643,12 +704,15 @@ impl EventHandler for MainState {
             self.missile_cooldown = Duration::from_millis(1000);  // 1秒冷却时间
         }
 
-        // 更新所有子弹和导弹
+        // 在子弹更新逻辑中添加扇形子弹的处理
         let bullet_speed = BULLET_SPEED_RATIO * self.window_size.height;
         for bullet in &mut self.bullets {
             match bullet.object_type {
                 GameObjectType::Bullet => {
                     bullet.pos.y -= bullet_speed;
+                }
+                GameObjectType::SpreadShot => {
+                    bullet.pos += bullet.speed;  // 使用预设的速度和方向
                 }
                 GameObjectType::GuidedMissile => {
                     bullet.update_guided_missile(&self.enemies, &self.window_size);
@@ -657,6 +721,19 @@ impl EventHandler for MainState {
                 _ => {}
             }
         }
+
+        // 在弹药生成逻辑中随机生成扇形弹药
+        self.ammo_spawn_timer += ctx.time.delta();
+        if self.ammo_spawn_timer.as_secs_f32() >= 15.0 {
+            if rand::random::<bool>() {  // 50%概率生成普通导弹弹药或扇形弹药
+                self.spawn_missile_ammo(ctx)?;
+            } else {
+                self.spawn_spread_ammo(ctx)?;
+            }
+            self.ammo_spawn_timer = Duration::from_secs(0);
+        }
+
+
         self.bullets.retain(|bullet| bullet.pos.y > -bullet.base_size.y);
 
         // 处理敌人生成
@@ -739,11 +816,11 @@ impl EventHandler for MainState {
 
 
         // 更新弹药生成计时器
-        self.ammo_spawn_timer += ctx.time.delta();
-        if self.ammo_spawn_timer.as_secs_f32() >= 15.0 { // 每15秒生成一个弹药包
-            self.spawn_missile_ammo(ctx)?;
-            self.ammo_spawn_timer = Duration::from_secs(0);
-        }
+        // self.ammo_spawn_timer += ctx.time.delta();
+        // if self.ammo_spawn_timer.as_secs_f32() >= 15.0 { // 每15秒生成一个弹药包
+        //     self.spawn_missile_ammo(ctx)?;
+        //     self.ammo_spawn_timer = Duration::from_secs(0);
+        // }
 
         // 更新弹药位置
         let ammo_speed = ENEMY_SPEED_RATIO * self.window_size.height;
@@ -773,6 +850,33 @@ impl EventHandler for MainState {
             self.ammo_items.remove(*idx);
         }
 
+        // 修改弹药拾取逻辑，确保正确处理所有类型的弹药
+        let mut collected_ammo = Vec::new();
+        for (idx, ammo) in self.ammo_items.iter().enumerate() {
+            if ammo.intersects(&self.player, &self.window_size) {
+                collected_ammo.push(idx);
+                match ammo.object_type {
+                    GameObjectType::SpreadAmmo => {
+                        self.has_spread_shot = true;
+                        self.particles.add_explosion(
+                            ammo.pos,
+                            Color::new(1.0, 0.5, 0.0, 1.0), // 橙色粒子效果
+                            &self.window_size,
+                        );
+                    }
+                    GameObjectType::MissileAmmo => {
+                        self.missile_ammo += 3; // 每个弹药包补充3发导弹
+                        self.particles.add_explosion(
+                            ammo.pos,
+                            Color::new(0.0, 1.0, 1.0, 1.0), // 青色粒子效果
+                            &self.window_size,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -798,20 +902,22 @@ impl EventHandler for MainState {
         // 绘制游戏对象
         self.player.draw(&mut canvas, &self.window_size);
 
+        // 绘制弹药和碰撞圈
+        for ammo in &self.ammo_items {
+            ammo.draw(&mut canvas, &self.window_size);
+            ammo.draw_collision_circle(ctx, &mut canvas, &self.window_size)?;  // 添加碰撞圈显示
+        }
+
         for bullet in &self.bullets {
             bullet.draw(&mut canvas, &self.window_size);
+            bullet.draw_collision_circle(ctx, &mut canvas, &self.window_size)?;
         }
 
         for enemy in &self.enemies {
             enemy.draw(&mut canvas, &self.window_size);
         }
 
-        // 绘制弹药
-        for ammo in &self.ammo_items {
-            ammo.draw(&mut canvas, &self.window_size);
-        }
-
-        // 绘制导弹数量
+        // 绘制导弹数量和扇形状态
         let ammo_text = graphics::Text::new(format!("Missiles: {}", self.missile_ammo));
         let ammo_pos = self.window_size.scale_vec2(Vec2::new(10.0, 40.0));
         canvas.draw(
@@ -825,15 +931,29 @@ impl EventHandler for MainState {
                 ))
         );
 
-        // 绘制碰撞检测范围
-       // self.player.draw_collision_circle(ctx, &mut canvas, &self.window_size)?;
-
-        for bullet in &self.bullets {
-            bullet.draw_collision_circle(ctx, &mut canvas, &self.window_size)?;
-        }
-
-        // 绘制粒子效果
-        self.particles.draw(ctx, &mut canvas, &self.window_size)?;
+        // 绘制扇形弹药状态
+        let spread_text = graphics::Text::new(
+            if self.has_spread_shot {
+                "Spread Shot: Active"
+            } else {
+                "Spread Shot: -"
+            }
+        );
+        let spread_pos = self.window_size.scale_vec2(Vec2::new(10.0, 70.0));
+        canvas.draw(
+            &spread_text,
+            DrawParam::default()
+                .dest(spread_pos)
+                .color(if self.has_spread_shot {
+                    Color::new(1.0, 0.5, 0.0, 1.0) // 橙色
+                } else {
+                    Color::new(0.5, 0.5, 0.5, 1.0) // 灰色
+                })
+                .scale(Vec2::new(
+                    self.window_size.scale_x,
+                    self.window_size.scale_y
+                ))
+        );
 
         // 绘制分数
         let score_text = graphics::Text::new(format!("Score: {}", self.score));
@@ -849,26 +969,10 @@ impl EventHandler for MainState {
                 ))
         );
 
-        // 绘制游戏结束提示
-        if self.game_over {
-            let game_over_text = graphics::Text::new("Game Over!");
-            let text_pos = self.window_size.scale_vec2(Vec2::new(
-                BASE_WINDOW_WIDTH/2.0 - 100.0,
-                BASE_WINDOW_HEIGHT/2.0
-            ));
-            canvas.draw(
-                &game_over_text,
-                DrawParam::default()
-                    .dest(text_pos)
-                    .color(Color::RED)
-                    .scale(Vec2::new(
-                        self.window_size.scale_x * 2.0,
-                        self.window_size.scale_y * 2.0
-                    ))
-            );
-        }
+        // 绘制粒子效果
+        self.particles.draw(ctx, &mut canvas, &self.window_size)?;
 
-        // 绘制游戏结束和重新开始提示
+        // 绘制游戏结束和暂停提示
         if self.game_over {
             let game_over_text = graphics::Text::new("Game Over!\nPress SPACE to restart");
             let text_pos = self.window_size.scale_vec2(Vec2::new(
@@ -887,7 +991,6 @@ impl EventHandler for MainState {
             );
         }
 
-        // 绘制暂停提示P
         if self.paused {
             let pause_text = graphics::Text::new("PAUSED\nPress P to continue");
             let text_pos = self.window_size.scale_vec2(Vec2::new(
@@ -905,7 +1008,6 @@ impl EventHandler for MainState {
                     ))
             );
         }
-
 
         canvas.finish(ctx)?;
         Ok(())
