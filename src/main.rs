@@ -370,6 +370,7 @@ struct MainState {
     score: i32,
     spawn_timer: Duration,
     game_over: bool,
+    paused: bool,    // 新增：暂停状态
     shoot_cooldown: Duration,
     star_field: Vec<(Vec2, f32)>,
     particles: ParticleSystem,
@@ -378,6 +379,7 @@ struct MainState {
     missile_ammo: i32,           // 新增：当前导弹数量
     ammo_spawn_timer: Duration,  // 新增：弹药生成计时器
     ammo_items: Vec<GameObject>, // 新增：场景中的弹药
+    p_key_pressed: bool,  // 新增：追踪 P 键状态
 }
 
 impl MainState {
@@ -410,6 +412,8 @@ impl MainState {
         sounds.shoot_sound.set_volume(0.3);
         sounds.explosion_sound.set_volume(0.5);
 
+
+
         Ok(MainState {
             window_size,
             player,
@@ -418,6 +422,7 @@ impl MainState {
             score: 0,
             spawn_timer: Duration::from_secs(0),
             game_over: false,
+            paused: false,    // 初始化暂停状态为 false
             shoot_cooldown: Duration::from_secs(0),
             star_field,
             particles: ParticleSystem::new(),
@@ -426,7 +431,35 @@ impl MainState {
             missile_ammo: 5,              // 初始5发导弹
             ammo_spawn_timer: Duration::from_secs(0),
             ammo_items: Vec::new(),
+            p_key_pressed: false,  // 初始化为 false
         })
+
+    }
+
+    // 添加游戏重置方法
+    fn reset(&mut self, ctx: &mut ggez::Context) -> GameResult {
+        self.player = GameObject::new(
+            ctx,
+            BASE_WINDOW_WIDTH / 2.0,
+            BASE_WINDOW_HEIGHT - 30.0,
+            50.0,
+            60.0,
+            GameObjectType::Player,
+        )?;
+
+        self.bullets.clear();
+        self.enemies.clear();
+        self.ammo_items.clear();
+        self.score = 0;
+        self.game_over = false;
+        self.paused = false;
+        self.spawn_timer = Duration::from_secs(0);
+        self.shoot_cooldown = Duration::from_secs(0);
+        self.missile_cooldown = Duration::from_secs(0);
+        self.missile_ammo = 5;
+        self.ammo_spawn_timer = Duration::from_secs(0);
+        self.p_key_pressed = false;
+        Ok(())
     }
 
     // 添加生成弹药的方法
@@ -547,9 +580,29 @@ impl EventHandler for MainState {
     fn update(&mut self, ctx: &mut ggez::Context) -> GameResult {
         self.update_window_size(ctx);
 
+        // 处理暂停键
+        if keyboard::is_key_pressed(ctx, KeyCode::P) {
+            if !self.p_key_pressed {  // 只在按键首次按下时触发
+                self.paused = !self.paused;
+                self.p_key_pressed = true;
+            }
+        } else {
+            self.p_key_pressed = false;  // 当按键释放时重置状态
+        }
+
+        //重新开始
         if self.game_over {
+            if keyboard::is_key_pressed(ctx, KeyCode::Space) {
+                self.reset(ctx)?;
+            }
             return Ok(());
         }
+
+        // 如果游戏暂停，只处理继续游戏的输入
+        if self.paused {
+            return Ok(());
+        }
+
 
         let mut dx = 0.0;
         let mut dy = 0.0;
@@ -814,6 +867,45 @@ impl EventHandler for MainState {
                     ))
             );
         }
+
+        // 绘制游戏结束和重新开始提示
+        if self.game_over {
+            let game_over_text = graphics::Text::new("Game Over!\nPress SPACE to restart");
+            let text_pos = self.window_size.scale_vec2(Vec2::new(
+                BASE_WINDOW_WIDTH/2.0 - 100.0,
+                BASE_WINDOW_HEIGHT/2.0
+            ));
+            canvas.draw(
+                &game_over_text,
+                DrawParam::default()
+                    .dest(text_pos)
+                    .color(Color::RED)
+                    .scale(Vec2::new(
+                        self.window_size.scale_x * 2.0,
+                        self.window_size.scale_y * 2.0
+                    ))
+            );
+        }
+
+        // 绘制暂停提示P
+        if self.paused {
+            let pause_text = graphics::Text::new("PAUSED\nPress P to continue");
+            let text_pos = self.window_size.scale_vec2(Vec2::new(
+                BASE_WINDOW_WIDTH/2.0 - 100.0,
+                BASE_WINDOW_HEIGHT/2.0
+            ));
+            canvas.draw(
+                &pause_text,
+                DrawParam::default()
+                    .dest(text_pos)
+                    .color(Color::YELLOW)
+                    .scale(Vec2::new(
+                        self.window_size.scale_x * 2.0,
+                        self.window_size.scale_y * 2.0
+                    ))
+            );
+        }
+
 
         canvas.finish(ctx)?;
         Ok(())
